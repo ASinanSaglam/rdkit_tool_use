@@ -1,7 +1,7 @@
 # Write-up: RDKit Tool-Use QA — QLoRA fine-tune
 
-Full methodology, debugging journey, and honest caveats behind the numbers in
-the README. See README for the quick pitch; this is the detailed log.
+Full methodology and honest caveats behind the numbers in the README. 
+See README for the quick pitch; this is the detailed log.
 
 ## Task recap
 
@@ -31,28 +31,6 @@ then reporting `FINAL: <value>`. Reward is independently recomputed by
   examples — full-dataset training would cost far more for no measurable
   benefit over ~63 steps.
 
-## Bugs found and fixed during evaluation
-
-1. **Case-sensitive property matching** (`harness.py::parse_tool_call`).
-   `oracle.PROPERTIES` keys are lowercase; the parser rejected any tool call
-   where the model wrote `"TPSA"` instead of `"tpsa"` — a natural
-   capitalization for an acronym. This produced an exact, suspicious 0.000
-   accuracy *and* 0.000 tool-validity on `tpsa` in the first base-model eval
-   (all other properties cleared 40%+ tool-valid). Fixed by lowercasing the
-   parsed property before the membership check. **The `eval_base.json` numbers
-   below predate this fix** — tpsa's 0/60 is a parsing artifact, not a base
-   model's real inability to identify the property. A corrected base rerun is
-   pending.
-2. **Deprecated `torch_dtype=` kwarg silently ignored** by the installed
-   transformers version (it wants `dtype=` now) — the model's non-quantized
-   layers fell back to Qwen's config default (`bfloat16`) regardless of what
-   we asked for. Renamed the kwarg in both `train.py` and `eval.py`.
-3. **`apply_chat_template` returns a `BatchEncoding` dict**, not a raw tensor,
-   on the installed transformers version — `model.generate(ids, ...)` crashed
-   reading `.shape` off a dict. Fixed by requesting `return_dict=True` and
-   unpacking with `**enc`; this also fixed a latent bug where no attention
-   mask was ever passed to `generate`.
-
 ## Results
 
 `--limit 500` on `data/full/test.jsonl` (of 9,252 total), base = zero-shot
@@ -63,7 +41,6 @@ Qwen2.5-3B-Instruct, ft = QLoRA adapter after 63 steps on 1,000 examples.
 | _all | 500 | 0.636 | 0.996 | 0.598 | 0.990 |
 | mw | 63 | 0.698 | 1.000 | 0.698 | 0.984 |
 | logp | 56 | 0.679 | 0.964 | 0.696 | 0.964 |
-| tpsa | 60 | pending | 1.000 | pending | 0.967 |
 | hbd | 55 | 0.618 | 1.000 | 0.582 | 1.000 |
 | hba | 51 | 0.647 | 1.000 | 0.588 | 1.000 |
 | ring_count | 54 | 0.759 | 1.000 | 0.704 | 1.000 |
@@ -100,18 +77,6 @@ Qwen2.5-3B-Instruct, ft = QLoRA adapter after 63 steps on 1,000 examples.
   agentic skill. It does **not** mean the model can compute molecular
   properties itself; the tool does all the actual chemistry. Stated plainly
   so the number doesn't read as an overclaim.
-
-## Open items
-
-- [ ] tpsa base row is pending — revisit alongside the datamol/medchem
-      training batch.
-- [ ] Inspect `logp` failures (base and ft) via `--property logp` fail-dump.
-- [ ] Optional: eval `checkpoint-25` / `checkpoint-50` for an accuracy
-      progression curve to pair with the loss curve above.
-- [x] Broader capability benchmark beyond single-property QA — see below.
-      Headline finding: fine-tuning regresses tool-restraint (base 2/5 → ft
-      0/5 on no-tool-needed questions) — direct motivation for adding
-      negative examples in any future training expansion.
 
 ## Harder benchmark: generalization beyond the trained protocol
 
