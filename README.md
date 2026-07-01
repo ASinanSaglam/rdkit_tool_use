@@ -48,6 +48,7 @@ rdkit_qa/
   dataset.py   # QA generation + scaffold split
   harness.py   # agentic tool-call loop + episode scoring (model-agnostic)
   eval.py      # benchmark a model (base or +LoRA), per-property table
+  bench_hard.py  # generalization eval: paraphrase, tool-restraint, multi-call
   train.py     # QLoRA SFT on gold tool-use traces (Colab T4)
 data/           # generated splits (gitignored)
 artifacts/models/  # LoRA adapters + checkpoints
@@ -83,11 +84,18 @@ python -m rdkit_qa.eval --name full --adapter artifacts/models/full --tag ft
 
 ## Results
 
-_Pending first runs — table filled from `results/*.json`, not before._
+QLoRA fine-tune (63 steps, 1,000 train examples — see write-up for why that's
+enough) takes overall accuracy from **63.6% → 99.6%** and tool-call validity
+from **59.8% → 99.0%** against zero-shot Qwen2.5-3B-Instruct, `--limit 500` on
+held-out scaffold-split test data.
 
 | property | base acc | ft acc | base tool-valid | ft tool-valid |
 |---|---|---|---|---|
-| _all_ | — | — | — | — |
+| _all_ | 0.636 | 0.996 | 0.598 | 0.990 |
+
+Full per-property breakdown, and honest caveats (class-imbalance inflation on
+lipinski/validity, the one open logp gap, planned harder benchmarks): see
+**[WRITE_UP.md](WRITE_UP.md)**.
 
 ## Scope & honesty
 

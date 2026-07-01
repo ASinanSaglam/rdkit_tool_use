@@ -87,6 +87,74 @@ def run_episode(generate, question: str, smiles: str, prop: str) -> dict:
     return {"tool_valid": tool_valid, "correct": correct, "final": final}
 
 
+MAX_TURNS = 6  # cap on tool-call/result round-trips per episode
+
+
+def run_episode_general(generate, question: str, expected: list[tuple[str, str]],
+                         expects_tool: bool = True) -> dict:
+    """General episode runner: zero, one, or many tool calls in one episode.
+    Unlike `run_episode` (fixed one-call protocol, used by the trained
+    pipeline), this loops until the model stops calling the tool, so it can
+    score out-of-training-distribution behavior: does the model call the
+    tool when it shouldn't (`expects_tool=False`), and does it chain
+    multiple calls when a question needs more than one property
+    (`expected` has >1 entries)?
+
+    expected: list of (smiles, property) pairs the final answer must cover.
+              Empty for no-tool-needed questions.
+    Returns: {"tool_calls": [...], "final": str|None, "correct": bool,
+              "tool_valid": bool}
+    tool_valid: every expected pair was called at least once (or, when
+                expects_tool=False, that no call was made at all).
+    correct: final answer covers every expected pair per oracle.score
+             (loosely -- checked against the whole final line and each
+             whitespace/punctuation-separated token, since a multi-property
+             final answer packs several values into one line). When
+             expects_tool=False, correct only requires a final answer with
+             no tool call; content-matching against a specific expected
+             answer is the caller's job (see bench_hard.py).
+    """
+    msgs = build_prompt(question)
+    made_calls = []
+    final = None
+    for _ in range(MAX_TURNS):
+        turn = generate(msgs)
+        call = parse_tool_call(turn)
+        if call is not None:
+            made_calls.append(call)
+            msgs = msgs + [{"role": "assistant", "content": turn},
+                            {"role": "user", "content": run_tool(call)}]
+            continue
+        final = parse_final(turn)
+        break
+
+    if expected:
+        tool_valid = all(any(c["smiles"] == s and c["property"] == p for c in made_calls)
+                          for s, p in expected)
+    else:
+        tool_valid = len(made_calls) == 0
+
+    if not expects_tool:
+        correct = final is not None and len(made_calls) == 0
+    elif final is None:
+        correct = False
+    else:
+        correct = all(_final_covers(final, s, p) for s, p in expected)
+
+    return {"tool_calls": made_calls, "final": final,
+            "correct": correct, "tool_valid": tool_valid}
+
+
+def _final_covers(final_text: str, smiles: str, prop: str) -> bool:
+    """Does final_text contain a value that scores correct for (smiles, prop)?
+    Tries the whole line first (single-property case), then each token
+    (multi-property case, e.g. "MW: 180.16, logP: 1.19")."""
+    if oracle.score(prop, final_text, smiles):
+        return True
+    return any(oracle.score(prop, tok, smiles)
+               for tok in re.split(r"[\s,;:=]+", final_text) if tok)
+
+
 def make_sft_trace(question, smiles, prop):
     """Gold two-turn trace for SFT. The assistant copies the tool result, which
     is the oracle ground truth — so the target answer is always correct."""
@@ -130,6 +198,29 @@ def demo():
     # make_sft_trace is self-consistent (final scores correct)
     tr = make_sft_trace(q, aspirin, "mw")
     assert oracle.score("mw", parse_final(tr[-1]["content"]), aspirin)
+
+    # run_episode_general: chains two tool calls then one combined FINAL
+    def multi_caller(messages):
+        calls = [m for m in messages if m["role"] == "assistant"
+                  and m["content"].startswith("TOOL_CALL")]
+        if len(calls) == 0:
+            return 'TOOL_CALL: {"smiles": "%s", "property": "mw"}' % aspirin
+        if len(calls) == 1:
+            return 'TOOL_CALL: {"smiles": "%s", "property": "logp"}' % aspirin
+        mw = oracle.compute(aspirin, "mw")
+        logp = oracle.compute(aspirin, "logp")
+        return f"FINAL: mw={mw}, logp={logp}"
+
+    r = run_episode_general(multi_caller, "mw and logp?",
+                            [(aspirin, "mw"), (aspirin, "logp")])
+    assert r["tool_valid"] and r["correct"] and len(r["tool_calls"]) == 2, r
+
+    # expects_tool=False: calling the tool anyway is a restraint failure
+    r = run_episode_general(good, q, [], expects_tool=False)
+    assert not r["tool_valid"] and not r["correct"], r
+    r = run_episode_general(lambda m: "FINAL: 4", "2+2?", [], expects_tool=False)
+    assert r["tool_valid"] and r["correct"], r
+
     print("harness.py: all checks pass")
 
 
