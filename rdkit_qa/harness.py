@@ -47,9 +47,12 @@ def parse_tool_call(text: str):
         d = json.loads(m.group(1))
     except json.JSONDecodeError:
         return None
-    if not isinstance(d, dict) or "smiles" not in d or d.get("property") not in oracle.PROPERTIES:
+    if not isinstance(d, dict) or "smiles" not in d:
         return None
-    return {"smiles": str(d["smiles"]), "property": d["property"]}
+    prop = str(d.get("property", "")).strip().lower()
+    if prop not in oracle.PROPERTIES:
+        return None
+    return {"smiles": str(d["smiles"]), "property": prop}
 
 
 def run_tool(call: dict) -> str:
