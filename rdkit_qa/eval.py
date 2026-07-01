@@ -41,13 +41,17 @@ def make_generate(model, tok):
 
 def evaluate(generate, rows):
     agg = defaultdict(lambda: {"n": 0, "correct": 0, "tool_valid": 0})
+    fails = []
     for r in tqdm(rows):
         res = harness.run_episode(generate, r["question"], r["smiles"], r["property"])
         for key in (r["property"], "_all"):
             agg[key]["n"] += 1
             agg[key]["correct"] += res["correct"]
             agg[key]["tool_valid"] += res["tool_valid"]
-    return agg
+        if not res["correct"]:
+            fails.append({"property": r["property"], "smiles": r["smiles"],
+                          "final": res["final"], "tool_valid": res["tool_valid"]})
+    return agg, fails
 
 
 def report(agg, tag):
@@ -69,18 +73,26 @@ def main():
     ap.add_argument("--split", default="test")
     ap.add_argument("--limit", type=int, default=0, help="0 = all")
     ap.add_argument("--tag", default="base")
+    ap.add_argument("--property", default=None, help="only eval one property, e.g. logp")
     args = ap.parse_args()
 
     rows = [json.loads(l) for l in (DATA / args.name / f"{args.split}.jsonl").open()]
+    if args.property:
+        rows = [r for r in rows if r["property"] == args.property]
     if args.limit:
         rows = rows[: args.limit]
     model, tok = load(args.model, args.adapter)
-    agg = evaluate(make_generate(model, tok), rows)
+    agg, fails = evaluate(make_generate(model, tok), rows)
     table = report(agg, args.tag)
     print(table)
+    if fails:
+        print(f"\n{len(fails)} failures:")
+        for f in fails:
+            print(f)
     RESULTS.mkdir(exist_ok=True)
     (RESULTS / f"eval_{args.tag}.md").write_text(table + "\n")
     (RESULTS / f"eval_{args.tag}.json").write_text(json.dumps(dict(agg), indent=2))
+    (RESULTS / f"eval_{args.tag}_fails.json").write_text(json.dumps(fails, indent=2))
 
 
 if __name__ == "__main__":
