@@ -97,6 +97,18 @@ Full per-property breakdown, and honest caveats (class-imbalance inflation on
 lipinski/validity, the one open logp gap, planned harder benchmarks): see
 **[WRITE_UP.md](WRITE_UP.md)**.
 
+## v2: native tool-calling, five behaviors
+
+`rdkit_qa_v2/` (new, `rdkit_qa/` above is frozen as-is) rebuilds the same
+idea on Qwen's real chat-template tool-calling instead of a hand-rolled
+plain-text protocol, and trains one combined skill set instead of one:
+single-property lookup, multi-property composition, tool-restraint
+(no-tool-needed questions), asking for missing required info instead of
+guessing, and honestly reporting a failed tool call instead of hallucinating
+a value. Motivated directly by `bench_hard`'s v1 finding that fine-tuning on
+tool-necessary examples alone made restraint *worse*, not better. See
+**[WRITE_UP_V2.md](WRITE_UP_V2.md)** (in progress).
+
 ## Scope & honesty
 
 - QLoRA (not full FT), standard stack: PyTorch, transformers, peft/TRL, RDKit.

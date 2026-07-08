@@ -1,6 +1,6 @@
 # RDKit tool-use QA — reproducible pipeline.
 # Local (6GB GPU): test, data, baseline smoke.  Colab (16GB): train, full eval.
-.PHONY: help setup test data-dev data-full baseline eval-base eval-ft bench-hard clean
+.PHONY: help setup test data-dev data-full baseline eval-base eval-ft bench-hard clean test-v2 data-dev-v2 data-full-v2
 
 PY ?= python
 # hard cap so a CUDA spike can't take down WSL; used for every local GPU run
@@ -34,5 +34,14 @@ eval-ft:  # fine-tuned benchmark; pass ADAPTER=path
 bench-hard:  # paraphrase/tool-restraint/multi-call generalization eval; pass ADAPTER= for ft
 	$(PY) -m rdkit_qa.bench_hard --name $(NAME) --adapter $(ADAPTER) --tag $(TAG)
 
+test-v2:  # v2 (native tool-calling) self-checks -- no GPU, no network
+	$(PY) -m rdkit_qa_v2.harness
+
+data-dev-v2:  # tiny v2 set -> data/v2/dev/
+	$(PY) -m rdkit_qa_v2.dataset --name dev
+
+data-full-v2:  # full v2 set (5 behaviors) -> data/v2/full/
+	$(PY) -m rdkit_qa_v2.dataset --name full
+
 clean:  # remove generated data + results (keeps cached raw_bbbp.csv)
-	rm -rf data/dev data/full results artifacts/models
+	rm -rf data/dev data/full data/v2 results artifacts/models
