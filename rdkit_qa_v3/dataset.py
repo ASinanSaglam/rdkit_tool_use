@@ -80,11 +80,20 @@ def make_examples(smiles_list, seed=0, split_name="train"):
         ex.append({"kind": "no_tool", "question": f"What is {a} plus {b}?", "answer": str(a + b)})
 
     # chain: common-name question -> name_to_smiles then rdkit_compute. Volume
-    # is capped by the curated name dict (~50 names/split after partitioning),
-    # not by molecule count, so scale via reps like the trivia bank instead of
-    # one-per-molecule.
+    # is capped by the curated name dict (~50 names/split), not by molecule
+    # count, so it needs its own reps formula -- NOT the trivia bank's
+    # min(5, ...): that cap is fine for a flat side-behavior, but chain is
+    # the one behavior v3 exists to teach, so its target scales with dataset
+    # size instead of sitting flat. Target = same order as `multi` (both are
+    # "2-call" episodes). Reps capped at 40/name to bound literal-question
+    # repetition -- each name only has ONE question template per property
+    # (no paraphrase bank like single's PARAPHRASES yet); if chain still
+    # needs more volume than 40 reps affords, add name-question paraphrases
+    # before raising this cap further.
+    chain_target = int(0.4 * len(smiles_list))
+    chain_reps = max(1, min(40, round(chain_target / max(1, len(chain_names)))))
     for name in chain_names:
-        for _ in range(reps):
+        for _ in range(chain_reps):
             prop = rng.choice(GOOD_PROPS)
             ex.append({"kind": "chain",
                        "question": NAME_QUESTION_TEMPLATES[prop].format(name=name),

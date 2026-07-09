@@ -10,9 +10,10 @@ only load_traces() and the `tools=` column differ, since v3 declares two tool
 schemas instead of one."""
 from __future__ import annotations
 import argparse, json, time
+from collections import Counter
 from pathlib import Path
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTConfig, SFTTrainer
 
@@ -23,12 +24,19 @@ MODELS = Path(__file__).resolve().parent.parent / "artifacts" / "models" / "v3"
 
 
 def load_traces(name: str, split: str = "train", limit: int | None = None):
+    """Returns (traces, kind_counts). kind_counts is the TRUE per-`kind` label
+    breakdown (single/multi/chain/no_tool/clarify/error) -- distinct from a
+    tool-calls-per-episode histogram, which conflates single+error (both 1
+    call) and multi+chain (both 2 calls) and would have hidden exactly the
+    chain-volume bug this project hit once already."""
     rows = [json.loads(l) for l in (DATA / name / f"{split}.jsonl").open()]
     if limit is not None:
         rows = rows[:limit]
     out = []
+    kind_counts = Counter()
     for r in rows:
         kind = r["kind"]
+        kind_counts[kind] += 1
         if kind == "single":
             msgs = harness.make_sft_trace(r["question"], "single", smiles=r["smiles"], prop=r["prop"])
         elif kind == "error":
@@ -45,7 +53,27 @@ def load_traces(name: str, split: str = "train", limit: int | None = None):
         else:
             raise ValueError(f"unknown kind: {kind}")
         out.append({"messages": msgs, "tools": harness.TOOL_SCHEMAS})
-    return out
+    return out, kind_counts
+
+
+class KindExposureCallback(TrainerCallback):
+    """Prints estimated cumulative examples-seen-so-far PER KIND at every log
+    step, alongside the normal loss/token-accuracy line. Aggregate metrics
+    are dominated by whichever kind is most common (single, ~88% of v3's
+    corpus) and can look saturated while a rare-but-critical kind (chain) has
+    barely been seen -- this is the concrete number to check before making a
+    stop/go call, not the aggregate loss curve. Exposure is a projection
+    (seen_so_far * dataset's kind fraction), assuming the sampler shuffles
+    close to uniformly, which it does here (dataset pre-shuffled in
+    dataset.py, Trainer's default sampler shuffles again)."""
+    def __init__(self, kind_fractions: dict[str, float], effective_batch_size: int):
+        self.kind_fractions = kind_fractions
+        self.effective_batch_size = effective_batch_size
+
+    def on_log(self, args, state, control, **kwargs):
+        seen = state.global_step * self.effective_batch_size
+        exposure = {k: round(seen * frac) for k, frac in self.kind_fractions.items()}
+        print(f"  est. examples seen by kind (step {state.global_step}, ~{seen} total): {exposure}")
 
 
 def main():
@@ -70,13 +98,12 @@ def main():
 
     from datasets import Dataset
     t0 = time.time()
-    train_ds = Dataset.from_list(load_traces(args.name, "train", limit=args.limit_train))
+    traces, kind_counts = load_traces(args.name, "train", limit=args.limit_train)
+    train_ds = Dataset.from_list(traces)
     print(f"train traces: {len(train_ds)} (loaded in {time.time() - t0:.1f}s)")
-    kinds = {}
-    for row in load_traces(args.name, "train", limit=args.limit_train):
-        n_calls = sum(1 for m in row["messages"] if m["role"] == "assistant" and m.get("tool_calls"))
-        kinds[n_calls] = kinds.get(n_calls, 0) + 1
-    print(f"tool-calls-per-episode distribution: {kinds}")
+    print(f"train rows by kind: {dict(kind_counts)}")
+    total_rows = sum(kind_counts.values())
+    kind_fractions = {k: v / total_rows for k, v in kind_counts.items()}
 
     tok = AutoTokenizer.from_pretrained(args.model)
     if tok.pad_token is None:
@@ -119,7 +146,9 @@ def main():
         report_to="none",
         assistant_only_loss=True,
     )
-    trainer = SFTTrainer(model=model, args=cfg, train_dataset=train_ds, processing_class=tok)
+    effective_batch_size = args.batch * args.grad_accum
+    trainer = SFTTrainer(model=model, args=cfg, train_dataset=train_ds, processing_class=tok,
+                         callbacks=[KindExposureCallback(kind_fractions, effective_batch_size)])
     t0 = time.time()
     result = trainer.train()
     print(f"train() wall time: {time.time() - t0:.1f}s -- {result.metrics}")
