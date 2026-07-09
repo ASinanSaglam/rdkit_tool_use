@@ -1,0 +1,27 @@
+# v3 GRPO stage ONLY (rdkit_qa_v3/train_grpo.py). Separate env, NOT `def`:
+#   micromamba create -n rdkit_v3 --clone def -y
+#   micromamba run -n rdkit_v3 pip install -r requirements-grpo.txt
+#
+# Why a separate env instead of bumping requirements.txt in place: trl's
+# native multi-turn `tools=` support on GRPOTrainer (auto tool-call/execute/
+# inject loop, no custom rollout_func needed) requires trl>=1.7, which in
+# turn requires transformers>=4.56 and accelerate>=1.4 -- a major jump over
+# the versions v1/v2/v3's SFT stage (train.py) is pinned to and verified
+# against. Keeping `def` on the SFT-verified stack avoids re-verifying
+# SFTTrainer against the newer transformers/accelerate before we have to.
+#
+# `micromamba clone` only copies conda-managed packages -- this project's
+# entire ML stack is pip-installed, so a fresh env needs the full pip install
+# below, not just a clone.
+torch==2.10.0
+peft==0.19.1
+bitsandbytes==0.49.2
+numpy==1.26.4
+rdkit==2023.9.6
+requests
+trl==1.7.1
+jmespath        # GRPOTrainer's tool-call response parsing; not auto-pulled by trl's own deps
+# transformers/accelerate/datasets: left unpinned here, resolved by pip to
+# satisfy trl==1.7.1's floor (transformers>=4.56.2, accelerate>=1.4.0,
+# datasets>=4.7.0). Confirmed working combo (2026-07-09): transformers==5.13.0,
+# accelerate==1.14.0, datasets==5.0.0.

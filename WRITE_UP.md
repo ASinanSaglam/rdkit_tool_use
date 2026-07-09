@@ -3,6 +3,25 @@
 Full methodology and honest caveats behind the numbers in the README. 
 See README for the quick pitch; this is the detailed log.
 
+## Where this sits in the series
+
+Three-stage arc, each stage's scope set by what the previous one's eval
+actually found, not planned upfront in full:
+
+1. **v1 (this doc)** — can the model learn reliable tool use at all, via a
+   hand-rolled plain-text protocol (`TOOL_CALL:`/`TOOL_RESULT:`/`FINAL:`),
+   with no dependence on the base model's native chat-template tool-calling
+   support. A baseline for the mechanic itself, independent of any specific
+   chat template.
+2. **[v2](WRITE_UP_V2.md)** — same task, switched to Qwen2.5's real native
+   tool-calling protocol, plus restraint (no-tool-needed, clarify-missing-
+   input, honest-tool-error) and a harder generalization eval — both added
+   directly in response to gaps `bench_hard.py` found here in v1.
+3. **v3** — a second tool and tool chaining (resolve a common name to a
+   SMILES string, then compute a property on the result), trained with GRPO
+   on top of SFT — RL specifically for the multi-tool routing decision,
+   where SFT's fixed gold call-order stops being sufficient.
+
 ## Task recap
 
 Qwen2.5-3B-Instruct answers a molecular-property question by emitting a
