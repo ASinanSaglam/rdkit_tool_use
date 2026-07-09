@@ -90,6 +90,9 @@ def main():
     ap.add_argument("--logging-steps", type=int, default=20)
     ap.add_argument("--limit-train", type=int, default=None)
     ap.add_argument("--fp16", action="store_true")
+    ap.add_argument("--resume-from-checkpoint", default=None,
+                    help="path to a checkpoint dir (e.g. .../full/checkpoint-700) to "
+                         "resume optimizer/scheduler/step state from, instead of step 0")
     args = ap.parse_args()
 
     print(f"gpu: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE'}")
@@ -150,7 +153,7 @@ def main():
     trainer = SFTTrainer(model=model, args=cfg, train_dataset=train_ds, processing_class=tok,
                          callbacks=[KindExposureCallback(kind_fractions, effective_batch_size)])
     t0 = time.time()
-    result = trainer.train()
+    result = trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
     print(f"train() wall time: {time.time() - t0:.1f}s -- {result.metrics}")
     trainer.save_model(out)
     print(f"saved final adapter -> {out}")

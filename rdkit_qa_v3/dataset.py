@@ -35,10 +35,38 @@ NAME_QUESTION_TEMPLATES = {
     "pains_alert":       "Does {name} trigger a PAINS (pan-assay interference) structural alert? Answer true or false.",
 }
 
+# alt phrasings per property for chain questions -- without these, repeating
+# chain volume just memorizes the ONE fixed NAME_QUESTION_TEMPLATES sentence
+# harder rather than generalizing past it. Added after an observed failure:
+# "Can you give me the MW for acetone?" (not the trained template) made the
+# fine-tuned model skip name_to_smiles and hallucinate a wrong SMILES instead
+# -- that exact phrasing is included below as a direct patch.
+CHAIN_PARAPHRASES = {
+    "mw":                ["How heavy is one mole of {name}, in grams?",
+                          "Can you give me the MW for {name}?"],
+    "logp":              ["Roughly how lipophilic (Crippen logP) is {name}?"],
+    "tpsa":              ["Compute the polar surface area for {name}, please."],
+    "hbd":               ["For {name}, count its hydrogen bond donor groups."],
+    "hba":               ["For {name}, count its hydrogen bond acceptor groups."],
+    "ring_count":        ["{name} -- how many ring systems does it contain?"],
+    "lipinski":          ["Would {name} be considered orally druglike by Lipinski's rule of five (true/false)?"],
+    "canonical":         ["Rewrite {name}'s structure as canonical SMILES."],
+    "qed":               ["What's the QED score for {name}?"],
+    "formula":           ["Give me the molecular formula for {name}."],
+    "num_stereocenters": ["How many stereocenters are in {name}?"],
+    "veber":             ["Is {name} Veber-rule compliant (<=10 rotatable bonds, TPSA<=140)?"],
+    "pains_alert":       ["Does {name} set off any PAINS structural alerts?"],
+}
+
 
 def _question(prop: str, smiles: str, rng: random.Random) -> str:
     choices = [oracle.QUESTION_TEMPLATES[prop]] + PARAPHRASES.get(prop, [])
     return rng.choice(choices).format(smiles=smiles)
+
+
+def _chain_question(prop: str, name: str, rng: random.Random) -> str:
+    choices = [NAME_QUESTION_TEMPLATES[prop]] + CHAIN_PARAPHRASES.get(prop, [])
+    return rng.choice(choices).format(name=name)
 
 
 def make_examples(smiles_list, seed=0, split_name="train"):
@@ -80,23 +108,22 @@ def make_examples(smiles_list, seed=0, split_name="train"):
         ex.append({"kind": "no_tool", "question": f"What is {a} plus {b}?", "answer": str(a + b)})
 
     # chain: common-name question -> name_to_smiles then rdkit_compute. Volume
-    # is capped by the curated name dict (~50 names/split), not by molecule
-    # count, so it needs its own reps formula -- NOT the trivia bank's
-    # min(5, ...): that cap is fine for a flat side-behavior, but chain is
-    # the one behavior v3 exists to teach, so its target scales with dataset
-    # size instead of sitting flat. Target = same order as `multi` (both are
-    # "2-call" episodes). Reps capped at 40/name to bound literal-question
-    # repetition -- each name only has ONE question template per property
-    # (no paraphrase bank like single's PARAPHRASES yet); if chain still
-    # needs more volume than 40 reps affords, add name-question paraphrases
-    # before raising this cap further.
-    chain_target = int(0.4 * len(smiles_list))
-    chain_reps = max(1, min(40, round(chain_target / max(1, len(chain_names)))))
+    # is capped by the curated name dict (~90 names/split after the v2 name-
+    # list expansion), not by molecule count, so it needs its own reps
+    # formula -- NOT the trivia bank's min(5, ...), which is fine for a flat
+    # side-behavior but chain is the one behavior v3 exists to teach.
+    # target/cap raised (0.4x->1.0x, 40->100) after an observed checkpoint
+    # failure: chain was too thin even at its old target, AND lacked
+    # paraphrase variety (see CHAIN_PARAPHRASES above), so it was learning a
+    # single fixed sentence per property rather than the underlying
+    # name->smiles->property behavior.
+    chain_target = int(1.0 * len(smiles_list))
+    chain_reps = max(1, min(100, round(chain_target / max(1, len(chain_names)))))
     for name in chain_names:
         for _ in range(chain_reps):
             prop = rng.choice(GOOD_PROPS)
             ex.append({"kind": "chain",
-                       "question": NAME_QUESTION_TEMPLATES[prop].format(name=name),
+                       "question": _chain_question(prop, name, rng),
                        "name": name, "prop": prop})
 
     rng.shuffle(ex)
